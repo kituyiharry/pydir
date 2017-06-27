@@ -6,6 +6,8 @@ Simple File Directory Browser that i wrote as a Weekend project
 
 import urwid
 import os
+import stat
+from math import log
 
 
 class FileWalker(object):
@@ -29,6 +31,25 @@ class FileWalker(object):
         dir_list.insert(0,".")
         dir_list.insert(1,"..")
         return dir_list
+    
+    def join_to_cur(self,path_append):
+        return os.path.join(self.curdir,path_append)
+
+    #Thank you Stack Overflow
+    def pretty_size(self,n,pow=0,b=1024,u='B',pre=['']+[p+'i'for p in'KMGTPEZY']):
+        pow,n=min(int(log(max(n*b**pow,1),b)),len(pre)-1),n*b**pow
+        return "%%.%if %%s%%s"%abs(pow%(-pow-1))%(n/b**float(pow),pre[pow],u)
+
+    def get_stat_info(self,file_or_dir=".",f_sim=True):
+        stat_inf =  os.stat(os.path.join( self.curdir,file_or_dir),follow_symlinks=f_sim)
+        return  {
+                'file-perm':stat.filemode(stat_inf.st_mode),'file-size' : self.pretty_size(stat_inf.st_size),   
+                'Links'   : stat_inf.st_nlink,'Owner'   : stat_inf.st_uid
+        }
+
+
+
+
 
 
 class PaletteInflator(object):
@@ -85,7 +106,7 @@ class ViewBuilder(object):
         """
         return  urwid.MonitoredList([
                     urwid.AttrMap(
-                        PopupableListItemButton(choice,self.SignalHandler),
+                        PopupableListItemButton(choice,self.SignalHandler,self.file_walker),
                         None,focus_map="reversed") 
                     for choice in self.file_walker.get_dir_list()
                     ])
@@ -100,11 +121,16 @@ class ViewBuilder(object):
         # insert a divider top pseudo-padding
         # list_items.insert(0,urwid.Divider())
         return  urwid.AttrWrap(
+                urwid.LineBox(
                 urwid.Padding(                                                  #Padd left and right edges
                         urwid.Columns([                                         #Column of Entries
-                            urwid.ListBox(urwid.SimpleFocusListWalker(self.gen_walker())), #Our ListBox of Items
-                            urwid.Filler(urwid.Divider(div_char="="))               #TODO:replace placeholder
-                        ],1),left=2,right=2) 
+                            ('weight',2, urwid.LineBox(
+                            urwid.ListBox(urwid.SimpleFocusListWalker(self.gen_walker())),title="Contents")), #Our ListBox of Items
+                                urwid.LineBox(
+                                    urwid.Filler( urwid.Divider()),
+                                title="Extra")
+                                               #TODO:replace placeholder
+                        ],1),left=2,right=2) , title="Directory Browser")
                     ,"body")
 
     def SignalHandler(self,key):
@@ -115,7 +141,7 @@ class ViewBuilder(object):
             self.frame.body.base_widget[0].body.set_focus(0)
             #self.frame.base_widget.contents['body'][0].base_widget._invalidate()
             #self.frame.body.base_widget[0].body._modified()
-            self.frame.footer = urwid.AttrMap(urwid.Text(["Changed!!" , self.file_walker.cur_dir]),'footer')
+            self.frame.footer = urwid.AttrMap(urwid.Text(["Changed!!" , self.file_walker.curdir]),'footer')
         
 
     def get_frame(self):
@@ -128,11 +154,34 @@ class ViewBuilder(object):
 
 class PopupItemInstance(urwid.WidgetWrap):
     signals = ['close']
+    """
+    Show Some stat information
+    TODO: Make this have more functionality with either Show stat info or Some other plugin 
+    e.g JSON export, XML export etc
+    """
 
-    def __init__(self):
-        close_b = urwid.Button("Popup!!")
+    def __init__(self,path):
+        close_b = urwid.Button("close")
         urwid.connect_signal(close_b,"click",lambda stub:self._emit("close"))
-        filler = urwid.Filler(close_b)
+        items = [urwid.Text( key , align="left") for key in path.keys()]
+        itema = [urwid.Text(str(value),align="right") for value in path.values()]
+        pile = urwid.Pile(
+                items
+            )
+        pile_b = urwid.Pile(itema)
+
+        filler = urwid.Filler(
+                urwid.LineBox(
+                urwid.Pile([
+                urwid.Divider(div_char="="),
+                urwid.Columns([
+                    urwid.AttrMap(pile,"bold"),
+                    pile_b
+                    ]),
+                urwid.Divider(div_char="="),
+                urwid.AttrMap(close_b,'green')
+                ]),title="Stats")
+                )
         super(PopupItemInstance,self).__init__(urwid.AttrWrap(filler,'popupbg'))
 
 
@@ -143,22 +192,28 @@ class PopupableListItemButton(urwid.PopUpLauncher):
     TODO: Inflate some sort of button and watch out for its click signal
     """
 
-    def __init__(self,choice_item,handler_func):
+    def __init__(self,choice_item,handler_func,walker):
+        self.file_walker_ref = walker 
         super(PopupableListItemButton,self).__init__(ListItemButton(choice_item).attach_to_handler(handler_func).create_pop_up_bridge(self))
 
     def create_pop_up(self):
         """Inflate a new list with items desired 
         :returns: TODO
         """
-        popup = PopupItemInstance()
+        popup = PopupItemInstance(self.file_walker_ref.get_stat_info(self.file_walker_ref.join_to_cur(self.item_label)))
         urwid.connect_signal(popup,'close',lambda stub :self.close_pop_up())
         return popup
+
+    def open_pop_up(self,stat_file_or_dir):
+        self.item_label = stat_file_or_dir
+        super(PopupableListItemButton,self).open_pop_up()
+        
 
     def get_pop_up_parameters(self):
         """
         return dict with parameters for new pop up renderinng -- see ref
         """
-        return {'left':4,'top':1,'overlay_width':32,'overlay_height':7}
+        return {'left':4,'top':1,'overlay_width':32,'overlay_height':9}
 
 class ListItemButton(urwid.Button):
 
@@ -183,7 +238,7 @@ class ListItemButton(urwid.Button):
         """
         if key in ('p' or 'P'):
             #TODO:Inflate some sort of submenu here!!
-            self.pop_up_bridge.open_pop_up()
+            return self.pop_up_bridge.open_pop_up(self.label)
         else:
             return super(ListItemButton,self).keypress(size,key)
 
@@ -203,6 +258,9 @@ class PyTree(object):
     def exit_handler(self,keybutton):
         if keybutton in ('q','Q'):
             raise urwid.ExitMainLoop()
+        elif keybutton in ('h','H'):
+            #TODO: Show some mappings
+            pass
 
 
     def run(self):
@@ -216,7 +274,9 @@ if __name__ == "__main__":
         ('body','white','dark blue','bold'),
         ('reversed','standout',''),
         ('footer','black','dark red','underline'),
-        ('popupbg','black','dark red','')
+        ('popupbg','black','dark red',''),
+        ('bold','black','white',''),
+        ('green','black','dark green',('bold','standout'))
         ]
     tree = PyTree(ViewBuilder().get_frame(),paletteInflator)
     tree.run()
