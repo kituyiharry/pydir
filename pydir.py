@@ -22,6 +22,8 @@ class FileWalker(object):
         """TODO: to be defined1. """
         self.curdir = os.getcwd();
         self.error_callback = on_error
+        self.desc_file = ".comments"
+        self.has_description = False
 
     def chdir_into(self,new_dir):
         if os.path.isdir(new_dir):
@@ -34,11 +36,22 @@ class FileWalker(object):
             return True
         return False
 
+    def filter_directory(self,item_list=[],hide_hidden=False):
+        items = item_list
+        if self.desc_file in items:
+            self.has_description = True
+        if hide_hidden:
+            items = [item for item in items if str(item).startswith('.')]
+        items.insert(0,".")
+        items.insert(1,"..")
+        return items
+
+
+
+
     def get_dir_list(self):
         dir_list = os.listdir(self.curdir)
-        dir_list.insert(0,".")
-        dir_list.insert(1,"..")
-        return dir_list
+        return self.filter_directory(dir_list)
     
     def join_to_cur(self,path_append):
         return os.path.join(self.curdir,path_append)
@@ -169,7 +182,9 @@ class ViewBuilder(object):
                                 urwid.SimpleFocusListWalker(
                                     self.gen_walker())),title="Contents")), #Our ListBox of Items
                                 urwid.LineBox(
-                                    urwid.Filler( urwid.Divider()),
+                                    urwid.Filler( 
+                                        urwid.Text("No Comments",align="center")
+                                        ),
                                 title="Extra")
                                                #TODO:replace placeholder
                         ],1),left=2,right=2) , title="Directory Browser")
@@ -181,7 +196,10 @@ class ViewBuilder(object):
             self.frame.body.base_widget[0].body.clear() 
             self.frame.body.base_widget[0].body.extend(self.gen_walker())
             self.frame.body.base_widget[0].body.set_focus(0)
-            self.frame.footer = urwid.AttrMap(urwid.Text(["Changed!!" , str(self.frame.body.base_widget[0])]),'footer')
+            self.frame.footer = urwid.AttrMap(urwid.Text(["Changed!!" , str(self.frame.body.base_widget[1])]),'footer')
+            if self.file_walker.has_description:
+                self.frame.body.base_widget[1].set_text("Comments available")
+
         
 
     def get_frame(self):
@@ -193,14 +211,6 @@ class ViewBuilder(object):
         return self.frame
 
 
-class ListPopupInstance(object):
-
-    """Inflate an Instance popup with buttons for each"""
-
-    def __init__(self):
-        """TODO: to be defined1. """
-
-        
 
 
 class PopupItemInstance(urwid.WidgetWrap):
@@ -213,7 +223,7 @@ class PopupItemInstance(urwid.WidgetWrap):
 
     def __init__(self,path):
         close_b = urwid.Button("close")
-        urwid.connect_signal(close_b,"click",lambda stub:self._emit("close"))
+        urwid.connect_signal(close_b,"click",lambda stub : self._emit("close"))
         items = [urwid.Text( key , align="left") for key in path.keys()]
         itema = [urwid.Text(str(value),align="right") for value in path.values()]
         pile = urwid.Pile(
@@ -243,8 +253,8 @@ class ListPopUpLauncher(urwid.PopUpLauncher):
         super(ListPopUpLauncher,self).__init__(CustomListBox(*args,**kwargs).create_pop_up_bridge(self))
 
     def create_pop_up(self):
-        pp = FileOperationsDialog(".")
-        urwid.connect_signal(pp,'close',self.close_pop_up())
+        pp = FileOperationsDialog(".",self)
+        urwid.connect_signal(pp,'exit',self.close_pop_up())
         return pp
 
     def get_pop_up_parameters(self):
@@ -253,38 +263,46 @@ class ListPopUpLauncher(urwid.PopUpLauncher):
 
 
 class FileOperationsDialog(urwid.WidgetWrap):
+    signals = ['exit']
 
     """A dialog box Encapsulating all the Basic Available File Operations"""
-    signals = ['close']
 
-    def __init__(self,path):
-        self.base_path = path
-        close_b = urwid.Button('Close')
-        urwid.connect_signal(close_b,'click',lambda b : self._emit('close'))
+    def __init__(self,path,bridge):
+        self.bridge = bridge
+        close_butt = urwid.Button('exit')
         json_b =  urwid.Button('Export to JSON')
         urwid.connect_signal(json_b,'click',self.json_exp)
+        urwid.connect_signal(close_butt,'click',lambda x:self.bridge.close_pop_up()) 
+        """
+        ^
+        |
+
+        Issues with Weakreferences being GC'd early therfore signals not working,
+        Not sure what todo
+        """
         widg = urwid.Filler(
                 urwid.LineBox(
                     urwid.Pile(
-                        [json_b,close_b]
+                        [json_b,
+                            close_butt]
                         )
                     ,title="File operations"
                     )
                 )
+        self.base_path = path
         super(FileOperationsDialog,self).__init__(urwid.AttrWrap(widg,'popupbg'))
 
 
     def json_exp(self,caller):
         exp_json = JSONExporter(self.base_path)
-        with open('dir_struct.json','w') as out_file:
-            exp_json.dump(out_file)
+        #with open('dir_struct.json','w') as out_file:
+        #    exp_json.dump(out_file)
+       
 
 
 
 
 
-
-        
 
 
 
@@ -318,7 +336,7 @@ class PopupableListItemButton(urwid.PopUpLauncher):
         """
         return dict with parameters for new pop up renderinng -- see ref
         """
-        return {'left':4,'top':1,'overlay_width':36,'overlay_height':9 } 
+        return {'left':4,'top':1,'overlay_width':36,'overlay_height':8 } 
 
 class ListItemButton(urwid.Button):
 
