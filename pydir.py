@@ -2,27 +2,35 @@
 
 """
 Simple File Directory Browser that i wrote as a Weekend project 
+
+
+TODO: use shutil for some file operations
 """
 
 import urwid
 import os
 import stat
 from math import log
-
+from  extra.exporters import JSONExporter
 
 class FileWalker(object):
 
     """Provides a Model for creating a List of current Directory 
         Structure"""
 
-    def __init__(self):
+    def __init__(self,on_error):
         """TODO: to be defined1. """
         self.curdir = os.getcwd();
+        self.error_callback = on_error
 
     def chdir_into(self,new_dir):
         if os.path.isdir(new_dir):
-            os.chdir(new_dir)
-            self.curdir = os.getcwd()
+            try:
+                os.chdir(new_dir)
+                self.curdir = os.getcwd()
+            except Exception as e:
+                self.error_callback(str(e))
+                return False
             return True
         return False
 
@@ -43,7 +51,7 @@ class FileWalker(object):
     def get_stat_info(self,file_or_dir=".",f_sim=True):
         stat_inf =  os.stat(os.path.join( self.curdir,file_or_dir),follow_symlinks=f_sim)
         return  {
-                'file-perm':stat.filemode(stat_inf.st_mode),'file-size' : self.pretty_size(stat_inf.st_size),   
+                'file-perm':stat.filemode(stat_inf.st_mode) ,'file-size' : self.pretty_size(stat_inf.st_size),   
                 'Links'   : stat_inf.st_nlink,'Owner'   : stat_inf.st_uid
         }
 
@@ -74,13 +82,42 @@ class PaletteInflator(object):
         self._palette = palette_list
 
 
+class CustomListBox(urwid.ListBox):
+
+    """Override for Custom Keypress Actions"""
+
+
+    def __init__(self,frame_area,*args,**kwargs):
+        self.frame_widget = frame_area
+        super(CustomListBox,self).__init__(*args,**kwargs)
+
+
+    def create_pop_up_bridge(self,bridge):
+        self.pop_up_bridge = bridge
+        return self
+
+    def keypress(self,size,key):
+
+        if key in ('e','E'):
+            #TODO : Another Popup
+            return self.pop_up_bridge.open_pop_up()
+            #return super(CustomListBox,self).keypress(size,key)
+        else:
+            return super(CustomListBox,self).keypress(size,key)
+
+    def attach_to_frame(self,frame_widget):
+        self.frame_widget = frame_widget
+        return self
+        
+
+
 class ViewBuilder(object):
 
     """Sets up the Required View"""
 
     def __init__(self):
         """Constructor """
-        self.file_walker = FileWalker()
+        self.file_walker = FileWalker(self.disp_error_msg)
         self.header = self.setup_header()
         self.body = self.setup_body()
         self.frame = None
@@ -102,7 +139,6 @@ class ViewBuilder(object):
     def gen_walker(self):
         """Creates a SimpleFocusListWalker
         :returns: TODO
-
         """
         return  urwid.MonitoredList([
                     urwid.AttrMap(
@@ -110,6 +146,9 @@ class ViewBuilder(object):
                         None,focus_map="reversed") 
                     for choice in self.file_walker.get_dir_list()
                     ])
+
+    def disp_error_msg(self,err):
+        self.frame.footer = urwid.AttrMap(urwid.Text([ u"Error : ", str(err)]), 'footer')
 
     def setup_body(self):
         """
@@ -124,8 +163,11 @@ class ViewBuilder(object):
                 urwid.LineBox(
                 urwid.Padding(                                                  #Padd left and right edges
                         urwid.Columns([                                         #Column of Entries
-                            ('weight',2, urwid.LineBox(
-                            urwid.ListBox(urwid.SimpleFocusListWalker(self.gen_walker())),title="Contents")), #Our ListBox of Items
+                            ('weight',1.39, urwid.LineBox(
+                            #urwid.ListBox(
+                            ListPopUpLauncher(None,
+                                urwid.SimpleFocusListWalker(
+                                    self.gen_walker())),title="Contents")), #Our ListBox of Items
                                 urwid.LineBox(
                                     urwid.Filler( urwid.Divider()),
                                 title="Extra")
@@ -134,14 +176,12 @@ class ViewBuilder(object):
                     ,"body")
 
     def SignalHandler(self,key):
-        #TODO: Open popup with this key
+        #TODO: Alter header data
         if self.file_walker.chdir_into(os.path.join(self.file_walker.curdir,key.get_label())):
             self.frame.body.base_widget[0].body.clear() 
             self.frame.body.base_widget[0].body.extend(self.gen_walker())
             self.frame.body.base_widget[0].body.set_focus(0)
-            #self.frame.base_widget.contents['body'][0].base_widget._invalidate()
-            #self.frame.body.base_widget[0].body._modified()
-            self.frame.footer = urwid.AttrMap(urwid.Text(["Changed!!" , self.file_walker.curdir]),'footer')
+            self.frame.footer = urwid.AttrMap(urwid.Text(["Changed!!" , str(self.frame.body.base_widget[0])]),'footer')
         
 
     def get_frame(self):
@@ -151,6 +191,17 @@ class ViewBuilder(object):
         if self.frame == None:
             self.frame=urwid.Frame(self.body,self.header)
         return self.frame
+
+
+class ListPopupInstance(object):
+
+    """Inflate an Instance popup with buttons for each"""
+
+    def __init__(self):
+        """TODO: to be defined1. """
+
+        
+
 
 class PopupItemInstance(urwid.WidgetWrap):
     signals = ['close']
@@ -173,23 +224,76 @@ class PopupItemInstance(urwid.WidgetWrap):
         filler = urwid.Filler(
                 urwid.LineBox(
                 urwid.Pile([
-                urwid.Divider(div_char="="),
-                urwid.Columns([
-                    urwid.AttrMap(pile,"bold"),
-                    pile_b
-                    ]),
-                urwid.Divider(div_char="="),
-                urwid.AttrMap(close_b,'green')
-                ]),title="Stats")
+                    urwid.Divider(div_char="="),
+                    urwid.Padding( 
+                        urwid.Columns([
+                            pile,
+                            pile_b
+                            ]),left=1,right=1),
+                        urwid.Divider(div_char="="),
+                        urwid.AttrMap(close_b,'green')
+                        ]),
+                title="Stats")
                 )
         super(PopupItemInstance,self).__init__(urwid.AttrWrap(filler,'popupbg'))
+
+class ListPopUpLauncher(urwid.PopUpLauncher):
+
+    def __init__(self,*args,**kwargs):
+        super(ListPopUpLauncher,self).__init__(CustomListBox(*args,**kwargs).create_pop_up_bridge(self))
+
+    def create_pop_up(self):
+        pp = FileOperationsDialog(".")
+        urwid.connect_signal(pp,'close',self.close_pop_up())
+        return pp
+
+    def get_pop_up_parameters(self):
+        return {'left':4,'top':3  , 'overlay_width':36,'overlay_height':9 } 
+
+
+
+class FileOperationsDialog(urwid.WidgetWrap):
+
+    """A dialog box Encapsulating all the Basic Available File Operations"""
+    signals = ['close']
+
+    def __init__(self,path):
+        self.base_path = path
+        close_b = urwid.Button('Close')
+        urwid.connect_signal(close_b,'click',lambda b : self._emit('close'))
+        json_b =  urwid.Button('Export to JSON')
+        urwid.connect_signal(json_b,'click',self.json_exp)
+        widg = urwid.Filler(
+                urwid.LineBox(
+                    urwid.Pile(
+                        [json_b,close_b]
+                        )
+                    ,title="File operations"
+                    )
+                )
+        super(FileOperationsDialog,self).__init__(urwid.AttrWrap(widg,'popupbg'))
+
+
+    def json_exp(self,caller):
+        exp_json = JSONExporter(self.base_path)
+        with open('dir_struct.json','w') as out_file:
+            exp_json.dump(out_file)
+
+
+
+
+
+
+        
+
 
 
 class PopupableListItemButton(urwid.PopUpLauncher):
     """
     Attached to any Button which when clicked
 
-    TODO: Inflate some sort of button and watch out for its click signal
+    TODO: Inflate some sort of button and watch out for its click signal,
+            Create An abstraction for separate popups
     """
 
     def __init__(self,choice_item,handler_func,walker):
@@ -198,13 +302,14 @@ class PopupableListItemButton(urwid.PopUpLauncher):
 
     def create_pop_up(self):
         """Inflate a new list with items desired 
-        :returns: TODO
+        :returns: TODO: Split among to typesof popup dialogs, 1 for stats another for Plugins basis on KeyPress
         """
         popup = PopupItemInstance(self.file_walker_ref.get_stat_info(self.file_walker_ref.join_to_cur(self.item_label)))
         urwid.connect_signal(popup,'close',lambda stub :self.close_pop_up())
         return popup
 
-    def open_pop_up(self,stat_file_or_dir):
+    def open_pop_up(self,stat_file_or_dir,keypress):
+        self.cur_key = keypress
         self.item_label = stat_file_or_dir
         super(PopupableListItemButton,self).open_pop_up()
         
@@ -213,7 +318,7 @@ class PopupableListItemButton(urwid.PopUpLauncher):
         """
         return dict with parameters for new pop up renderinng -- see ref
         """
-        return {'left':4,'top':1,'overlay_width':32,'overlay_height':9}
+        return {'left':4,'top':1,'overlay_width':36,'overlay_height':9 } 
 
 class ListItemButton(urwid.Button):
 
@@ -238,7 +343,7 @@ class ListItemButton(urwid.Button):
         """
         if key in ('p' or 'P'):
             #TODO:Inflate some sort of submenu here!!
-            return self.pop_up_bridge.open_pop_up(self.label)
+            return self.pop_up_bridge.open_pop_up(self.label,key)
         else:
             return super(ListItemButton,self).keypress(size,key)
 
@@ -274,7 +379,7 @@ if __name__ == "__main__":
         ('body','white','dark blue','bold'),
         ('reversed','standout',''),
         ('footer','black','dark red','underline'),
-        ('popupbg','black','dark red',''),
+        ('popupbg','white','dark red',''),
         ('bold','black','white',''),
         ('green','black','dark green',('bold','standout'))
         ]
