@@ -36,22 +36,25 @@ class FileWalker(object):
             return True
         return False
 
-    def filter_directory(self,item_list=[],hide_hidden=False):
+    def filter_directory(self,item_list=[],hide_hidden=False,hide_dir_changers=False):
         items = item_list
         if self.desc_file in items:
             self.has_description = True
         if hide_hidden:
             items = [item for item in items if str(item).startswith('.')]
-        items.insert(0,".")
-        items.insert(1,"..")
+        if hide_dir_changers:
+            return items
+        else:
+            items.insert(0,"..")
+            #items.insert(1,"..")
         return items
 
 
 
 
-    def get_dir_list(self):
+    def get_dir_list(self,hide_dir_changers=False):
         dir_list = os.listdir(self.curdir)
-        return self.filter_directory(dir_list)
+        return self.filter_directory(dir_list,hide_dir_changers=hide_dir_changers)
     
     def join_to_cur(self,path_append):
         return os.path.join(self.curdir,path_append)
@@ -94,15 +97,15 @@ class PaletteInflator(object):
         """Sets Currents active Palette"""
         self._palette = palette_list
 
-
 class CustomListBox(urwid.ListBox):
 
     """Override for Custom Keypress Actions"""
+    signals = ['toggle-select']
 
 
-    def __init__(self,frame_area,*args,**kwargs):
-        self.frame_widget = frame_area
-        super(CustomListBox,self).__init__(*args,**kwargs)
+    def __init__(self,*args,**kwargs):
+        #self.frame_widget = frame_area
+        super(CustomListBox,self).__init__(*args,**kwargs) 
 
 
     def create_pop_up_bridge(self,bridge):
@@ -115,8 +118,14 @@ class CustomListBox(urwid.ListBox):
             #TODO : Another Popup
             return self.pop_up_bridge.open_pop_up()
             #return super(CustomListBox,self).keypress(size,key)
+        elif key in ('s','S'):
+            return self.toggle_select_mode()
         else:
             return super(CustomListBox,self).keypress(size,key)
+
+    def toggle_select_mode(self):
+            self._emit('toggle-select')
+
 
     def attach_to_frame(self,frame_widget):
         self.frame_widget = frame_widget
@@ -130,10 +139,12 @@ class ViewBuilder(object):
 
     def __init__(self):
         """Constructor """
+        self.is_in_normal_mode= True
         self.file_walker = FileWalker(self.disp_error_msg)
         self.header = self.setup_header()
         self.body = self.setup_body()
         self.frame = None
+        self.select_mode_walker_cache = {} #TODO: Clear this minimal Cache after running an operation
 
     def setup_header(self,header_align="left"):
         """
@@ -176,29 +187,84 @@ class ViewBuilder(object):
                 urwid.LineBox(
                 urwid.Padding(                                                  #Padd left and right edges
                         urwid.Columns([                                         #Column of Entries
-                            ('weight',1.39, urwid.LineBox(
+                            ('weight',1.59, urwid.LineBox(
                             #urwid.ListBox(
-                            ListPopUpLauncher(None,
-                                urwid.SimpleFocusListWalker(
+                            ListPopUpLauncher(self.mode_switch_handler,
+                                body=urwid.SimpleFocusListWalker(
                                     self.gen_walker())),title="Contents")), #Our ListBox of Items
                                 urwid.LineBox(
-                                    urwid.Filler( 
+                                    urwid.Filler(
+                                    #urwid.ListBox( 
                                         urwid.Text("No Comments",align="center")
+                                        #urwid.SimpleFocusListWalker(self.selectable_mode(self.file_walker.get_dir_list(hide_dir_changers=True)))
                                         ),
-                                title="Extra")
+                                title="Operations")
                                                #TODO:replace placeholder
                         ],1),left=2,right=2) , title="Directory Browser")
-                    ,"body")
+                        ,"body")
+
+
+    def mode_switch_handler(self,key):
+
+        """
+        Switch between Normal mode for browsing file and Select mode for Checking and Picking Multiple items
+
+        key: widget selected i.e the ListBox in this case
+        """
+        if(self.is_in_normal_mode):
+            #Switch to select mode
+            if self.check_sel_cache():
+                mode = self.select_mode_walker_cache[self.file_walker.curdir]
+            else:
+                mode  =   self.selectable_mode(self.file_walker.get_dir_list(hide_dir_changers=True))
+                self.select_mode_walker_cache.update({self.file_walker.curdir:mode})
+            self.switch_to_mode(key,mode)
+        else:
+            self.switch_to_mode(key,self.gen_walker())
+    
+    def check_sel_cache(self):
+        """
+        Check if the Current directory is in the dict, useful for select mode operations to track 
+        Selected Widgets
+        """
+        if self.select_mode_walker_cache.keys().__contains__(self.file_walker.curdir):
+            return True
+        return False
+
+    def switch_to_mode(self,key,FocusWalker):
+        """
+        Switch The listbox Walkers between Select mode and Normal mode
+
+        key : Widget in question :Listbox
+        FocusWalker: new MonitoredList to swap
+        """
+        prev_pos = key.body.get_focus()[1]
+        key.body.clear()
+        key.body.extend(FocusWalker)
+        key.body.set_focus(prev_pos)
+        self.is_in_normal_mode = not self.is_in_normal_mode
 
     def SignalHandler(self,key):
+        """
+        Handles normal mode button clicks
+
+        key: widget in question :Button
+        """
         #TODO: Alter header data
         if self.file_walker.chdir_into(os.path.join(self.file_walker.curdir,key.get_label())):
             self.frame.body.base_widget[0].body.clear() 
             self.frame.body.base_widget[0].body.extend(self.gen_walker())
             self.frame.body.base_widget[0].body.set_focus(0)
-            self.frame.footer = urwid.AttrMap(urwid.Text(["Changed!!" , str(self.frame.body.base_widget[1])]),'footer')
             if self.file_walker.has_description:
                 self.frame.body.base_widget[1].set_text("Comments available")
+
+
+    def directory_switch_handler(self,key,focus_walker):
+        prev_walker = self.body.base_widget[0].body
+        if self.file_walker.chdir_into(self.file_walker.join_to_cur(key.get_label())):
+            prev_walker.clear()
+            prev_walker.extend(focus_walker)
+            prev_walker.set_focus(0)
 
         
 
@@ -210,6 +276,43 @@ class ViewBuilder(object):
             self.frame=urwid.Frame(self.body,self.header)
         return self.frame
 
+    def select_signal_handler(self,key):
+        if self.file_walker.chdir_into(self.file_walker.join_to_cur(key.get_label())):
+            selectable_list_box  = self.frame.body.base_widget[0]
+            selectable_list_box.body.clear()
+            if(self.check_sel_cache()):
+                selectable_list_box.body.extend(self.select_mode_walker_cache[self.file_walker.curdir])
+            else:
+                tracked_item = self.selectable_mode(self.file_walker.get_dir_list(hide_dir_changers=True))
+                self.select_mode_walker_cache.update({self.file_walker.curdir:tracked_item })
+                selectable_list_box.body.extend(tracked_item)
+
+    def selectable_mode(self,dir_contents=[]):
+        traverse_buttons = [urwid.Button('..',on_press=self.select_signal_handler)]
+        traverse_buttons.extend([urwid.CheckBox(file_or_dir,on_state_change=self.change_attr) for file_or_dir in dir_contents ])
+        return urwid.MonitoredFocusList(traverse_buttons)
+
+    def msg_to_footer(self,msg):
+        self.frame.footer=urwid.AttrMap(urwid.Text(str(msg)),'footer')
+
+    def change_attr(self,key,data):
+        """
+        key  : The widget in focus 
+        data : The current value for the widget
+        """
+        if(data):
+            self.msg_to_footer(str((key,data)))
+            key = urwid.AttrMap(key,'footer')
+            self.swap_widget_at_focus(key)
+        else:
+            self.msg_to_footer(str((key,data)))
+            key = urwid.AttrMap(key,'body')
+            self.swap_widget_at_focus(key)
+
+    def swap_widget_at_focus(self,key):
+        pos = self.frame.body.base_widget[0].focus_position
+        self.frame.body.base_widget[0].body[pos] = key
+    
 
 
 
@@ -249,8 +352,9 @@ class PopupItemInstance(urwid.WidgetWrap):
 
 class ListPopUpLauncher(urwid.PopUpLauncher):
 
-    def __init__(self,*args,**kwargs):
+    def __init__(self,handler_func,*args,**kwargs):
         super(ListPopUpLauncher,self).__init__(CustomListBox(*args,**kwargs).create_pop_up_bridge(self))
+        urwid.connect_signal(self.base_widget,'toggle-select',handler_func)
 
     def create_pop_up(self):
         pp = FileOperationsDialog(".",self)
@@ -295,14 +399,9 @@ class FileOperationsDialog(urwid.WidgetWrap):
 
     def json_exp(self,caller):
         exp_json = JSONExporter(self.base_path)
-        #with open('dir_struct.json','w') as out_file:
-        #    exp_json.dump(out_file)
+        with open('dir_struct.json','w') as out_file:
+            exp_json.dump(out_file)
        
-
-
-
-
-
 
 
 
