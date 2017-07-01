@@ -12,6 +12,7 @@ import os
 import stat
 from math import log
 from  extra.exporters import JSONExporter
+from  extra.ops_manager import MoveOperation
 
 class FileWalker(object):
 
@@ -72,10 +73,6 @@ class FileWalker(object):
         }
 
 
-
-
-
-
 class PaletteInflator(object):
 
     """An abstraction The Global palette and various operations
@@ -117,15 +114,13 @@ class CustomListBox(urwid.ListBox):
         if key in ('e','E'):
             #TODO : Another Popup
             return self.pop_up_bridge.open_pop_up()
-            #return super(CustomListBox,self).keypress(size,key)
         elif key in ('s','S'):
             return self.toggle_select_mode()
         else:
             return super(CustomListBox,self).keypress(size,key)
 
     def toggle_select_mode(self):
-            self._emit('toggle-select')
-
+        self._emit('toggle-select')
 
     def attach_to_frame(self,frame_widget):
         self.frame_widget = frame_widget
@@ -155,20 +150,24 @@ class ViewBuilder(object):
 
         self.header = urwid.AttrMap(urwid.Columns(
             [
-                urwid.Text(item ,align=header_align) for item in base_dir.split(os.path.sep) 
+                ('weight',1.59,urwid.Text(self.file_walker.curdir)),
+                urwid.ProgressBar('popupbg','green')
             ],1
             ),"header")
         return self.header
+
+    def type_aware_wrap(self,file_or_dir):
+        if os.path.isdir(self.file_walker.join_to_cur(file_or_dir)):
+            return urwid.AttrMap(PopupableListItemButton(file_or_dir,self.SignalHandler,self.file_walker),"directory",focus_map="reversed")
+        return urwid.AttrMap(PopupableListItemButton(file_or_dir,self.SignalHandler,self.file_walker),"file",focus_map='reversed')
+
 
     def gen_walker(self):
         """Creates a SimpleFocusListWalker
         :returns: TODO
         """
         return  urwid.MonitoredList([
-                    urwid.AttrMap(
-                        PopupableListItemButton(choice,self.SignalHandler,self.file_walker),
-                        None,focus_map="reversed") 
-                    for choice in self.file_walker.get_dir_list()
+                        self.type_aware_wrap(choice) for choice in self.file_walker.get_dir_list()
                     ])
 
     def disp_error_msg(self,err):
@@ -178,31 +177,22 @@ class ViewBuilder(object):
         """
         Body that Will be wrapped in a Frame
         """
-        # return urwid.AttrMap(urwid.SolidFill(),"body")
-        # for b in list_items:
-            # urwid.connect_signal(b.base_widget,'click',self.SignalHandler)
-        # insert a divider top pseudo-padding
-        # list_items.insert(0,urwid.Divider())
         return  urwid.AttrWrap(
                 urwid.LineBox(
                 urwid.Padding(                                                  #Padd left and right edges
                         urwid.Columns([                                         #Column of Entries
                             ('weight',1.59, urwid.LineBox(
-                            #urwid.ListBox(
-                            ListPopUpLauncher(self.mode_switch_handler,
-                                body=urwid.SimpleFocusListWalker(
-                                    self.gen_walker())),title="Contents")), #Our ListBox of Items
+                            ListPopUpLauncher(self.mode_switch_handler,body=urwid.SimpleFocusListWalker(self.gen_walker())),title="Contents")), 
                                 urwid.LineBox(
-                                    urwid.Filler(
-                                    #urwid.ListBox( 
-                                        urwid.Text("No Comments",align="center")
-                                        #urwid.SimpleFocusListWalker(self.selectable_mode(self.file_walker.get_dir_list(hide_dir_changers=True)))
-                                        ),
+                                    urwid.ListBox([urwid.Text("No Comments",align="center")]),
                                 title="Operations")
-                                               #TODO:replace placeholder
-                        ],1),left=2,right=2) , title="Directory Browser")
-                        ,"body")
+                        ],1),
+                        left=2,right=2) , 
+                title="Directory Browser")
+                ,"body")
 
+    def filter_function_handler(self,key):
+        self.msg_to_footer(str(key))
 
     def mode_switch_handler(self,key):
 
@@ -255,9 +245,7 @@ class ViewBuilder(object):
             self.frame.body.base_widget[0].body.clear() 
             self.frame.body.base_widget[0].body.extend(self.gen_walker())
             self.frame.body.base_widget[0].body.set_focus(0)
-            if self.file_walker.has_description:
-                self.frame.body.base_widget[1].set_text("Comments available")
-
+            self.frame.header.base_widget[0].set_text(self.file_walker.curdir)
 
     def directory_switch_handler(self,key,focus_walker):
         prev_walker = self.body.base_widget[0].body
@@ -344,7 +332,8 @@ class PopupItemInstance(urwid.WidgetWrap):
                             pile_b
                             ]),left=1,right=1),
                         urwid.Divider(div_char="="),
-                        urwid.AttrMap(close_b,'green')
+                        urwid.AttrMap(close_b,'green'),
+                        urwid.Divider()
                         ]),
                 title="Stats")
                 )
@@ -362,7 +351,7 @@ class ListPopUpLauncher(urwid.PopUpLauncher):
         return pp
 
     def get_pop_up_parameters(self):
-        return {'left':4,'top':3  , 'overlay_width':36,'overlay_height':9 } 
+        return {'left':4,'top':3  , 'overlay_width':36,'overlay_height':7 } 
 
 
 
@@ -419,7 +408,6 @@ class PopupableListItemButton(urwid.PopUpLauncher):
 
     def create_pop_up(self):
         """Inflate a new list with items desired 
-        :returns: TODO: Split among to typesof popup dialogs, 1 for stats another for Plugins basis on KeyPress
         """
         popup = PopupItemInstance(self.file_walker_ref.get_stat_info(self.file_walker_ref.join_to_cur(self.item_label)))
         urwid.connect_signal(popup,'close',lambda stub :self.close_pop_up())
@@ -435,7 +423,7 @@ class PopupableListItemButton(urwid.PopUpLauncher):
         """
         return dict with parameters for new pop up renderinng -- see ref
         """
-        return {'left':4,'top':1,'overlay_width':36,'overlay_height':8 } 
+        return {'left':6,'top':1,'overlay_width':36,'overlay_height':9 } 
 
 class ListItemButton(urwid.Button):
 
@@ -481,13 +469,15 @@ class PyTree(object):
         if keybutton in ('q','Q'):
             raise urwid.ExitMainLoop()
         elif keybutton in ('h','H'):
-            #TODO: Show some mappings
             pass
-
+            #TODO: Show some mappings
+            #bt =urwid.AttrWrap(urwid.BigText(u"Quit",urwid.Thin6x6Font()),'popupbg');
+            #prev_w = self.loop.widget
+            #self.loop.widget = urwid.Overlay(bt,prev_w,"center",None,'middle',None)
 
     def run(self):
-        loop = urwid.MainLoop(self.view,self.palette,pop_ups=True,unhandled_input=self.exit_handler)
-        loop.run()
+        self.loop = urwid.MainLoop(self.view,self.palette,pop_ups=True,unhandled_input=self.exit_handler)
+        self.loop.run()
 
 if __name__ == "__main__":
     paletteInflator = PaletteInflator();
@@ -498,7 +488,9 @@ if __name__ == "__main__":
         ('footer','black','dark red','underline'),
         ('popupbg','white','dark red',''),
         ('bold','black','white',''),
-        ('green','black','dark green',('bold','standout'))
+        ('green','black','dark green',('bold','standout')),
+        ('directory','white','dark blue'),
+        ('file','black','dark blue')
         ]
     tree = PyTree(ViewBuilder().get_frame(),paletteInflator)
     tree.run()
