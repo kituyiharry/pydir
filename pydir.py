@@ -10,6 +10,7 @@ TODO: use shutil for some file operations
 import urwid
 import os
 import stat
+import shutil
 from math import log
 from  extra.exporters import JSONExporter
 from  extra.ops_manager import MoveOperation
@@ -20,13 +21,17 @@ class FileWalker(object):
         Structure"""
 
     def __init__(self,on_error):
-        """TODO: to be defined1. """
+        """basic constructor """
         self.curdir = os.getcwd();
         self.error_callback = on_error
-        self.desc_file = ".comments"
-        self.has_description = False
+        #self.desc_file = ".comments"
+        #self.has_description = False
 
+    
     def chdir_into(self,new_dir):
+        """
+        Switches from the current directory to a new directory
+        """
         if os.path.isdir(new_dir):
             try:
                 os.chdir(new_dir)
@@ -38,9 +43,11 @@ class FileWalker(object):
         return False
 
     def filter_directory(self,item_list=[],hide_hidden=False,hide_dir_changers=False):
+        """
+        Depending on arguments it filters out hidden files that normally begin with a
+        fullstop if needed
+        """
         items = item_list
-        if self.desc_file in items:
-            self.has_description = True
         if hide_hidden:
             items = [item for item in items if str(item).startswith('.')]
         if hide_dir_changers:
@@ -50,27 +57,47 @@ class FileWalker(object):
             #items.insert(1,"..")
         return items
 
-
-
-
     def get_dir_list(self,hide_dir_changers=False):
+        """
+        Returns a filtered list of current items in this directory
+        """
         dir_list = os.listdir(self.curdir)
         return self.filter_directory(dir_list,hide_dir_changers=hide_dir_changers)
     
     def join_to_cur(self,path_append):
+        """
+        Concatenates the passed path to the current path
+        """
         return os.path.join(self.curdir,path_append)
 
     #Thank you Stack Overflow
     def pretty_size(self,n,pow=0,b=1024,u='B',pre=['']+[p+'i'for p in'KMGTPEZY']):
+        """
+        it just changes directory file sizes (e.g 11843334345) to more readable ones e.g
+        118GB (may be ironically unreadable code)
+        """
         pow,n=min(int(log(max(n*b**pow,1),b)),len(pre)-1),n*b**pow
         return "%%.%if %%s%%s"%abs(pow%(-pow-1))%(n/b**float(pow),pre[pow],u)
 
+
+
     def get_stat_info(self,file_or_dir=".",f_sim=True):
+        """
+        Returns a dict of stat information of file passed (os.stat)
+        """
         stat_inf =  os.stat(os.path.join( self.curdir,file_or_dir),follow_symlinks=f_sim)
         return  {
                 'file-perm':stat.filemode(stat_inf.st_mode) ,'file-size' : self.pretty_size(stat_inf.st_size),   
                 'Links'   : stat_inf.st_nlink,'Owner'   : stat_inf.st_uid
         }
+
+    def get_disk_usage(self):
+        """
+        Gets the Disk usage and returns a dict   
+        """
+        du = shutil.disk_usage(self.curdir)
+        return {'total':self.pretty_size(du.total),'free':self.pretty_size(du.free),'used':self.pretty_size(du.used)}
+
 
 
 class PaletteInflator(object):
@@ -81,6 +108,7 @@ class PaletteInflator(object):
     def __init__(self):
         """TODO: to be defined1. """
         self._palette=[]
+
 
     @property
     def palette(self):
@@ -96,21 +124,29 @@ class PaletteInflator(object):
 
 class CustomListBox(urwid.ListBox):
 
-    """Override for Custom Keypress Actions"""
+    """
+    Custom implementation of the Listbox able to handle extra Keypresses
+
+    """
     signals = ['toggle-select']
 
 
     def __init__(self,*args,**kwargs):
-        #self.frame_widget = frame_area
         super(CustomListBox,self).__init__(*args,**kwargs) 
 
 
     def create_pop_up_bridge(self,bridge):
+        """
+        Used to backreference this widget so that popups inflated can have a Close button that closes them
+        ,Probably not a good callback pattern but meh!!
+        """
         self.pop_up_bridge = bridge
         return self
 
     def keypress(self,size,key):
-
+        """
+        Override method to customize key handling
+        """
         if key in ('e','E'):
             #TODO : Another Popup
             return self.pop_up_bridge.open_pop_up()
@@ -120,13 +156,11 @@ class CustomListBox(urwid.ListBox):
             return super(CustomListBox,self).keypress(size,key)
 
     def toggle_select_mode(self):
+        """
+        Emits a signal using urwids signalling system telling the listbox to swap its walker between the 
+        normal mode or multi select mode
+        """
         self._emit('toggle-select')
-
-    def attach_to_frame(self,frame_widget):
-        self.frame_widget = frame_widget
-        return self
-        
-
 
 class ViewBuilder(object):
 
@@ -171,6 +205,9 @@ class ViewBuilder(object):
                     ])
 
     def disp_error_msg(self,err):
+        """
+        Callback function used by the FileWalker to display error messages to the footer
+        """
         self.frame.footer = urwid.AttrMap(urwid.Text([ u"Error : ", str(err)]), 'footer')
 
     def setup_body(self):
@@ -190,9 +227,6 @@ class ViewBuilder(object):
                         left=2,right=2) , 
                 title="Directory Browser")
                 ,"body")
-
-    def filter_function_handler(self,key):
-        self.msg_to_footer(str(key))
 
     def mode_switch_handler(self,key):
 
@@ -247,24 +281,19 @@ class ViewBuilder(object):
             self.frame.body.base_widget[0].body.set_focus(0)
             self.frame.header.base_widget[0].set_text(self.file_walker.curdir)
 
-    def directory_switch_handler(self,key,focus_walker):
-        prev_walker = self.body.base_widget[0].body
-        if self.file_walker.chdir_into(self.file_walker.join_to_cur(key.get_label())):
-            prev_walker.clear()
-            prev_walker.extend(focus_walker)
-            prev_walker.set_focus(0)
-
-        
-
     def get_frame(self):
         """
         Returns TopMostFrame
         """
         if self.frame == None:
-            self.frame=urwid.Frame(self.body,self.header)
+            self.frame=urwid.Frame(self.body,self.header,footer=self.get_footer())
         return self.frame
 
     def select_signal_handler(self,key):
+        """
+        Handles switching directories while in select mode, all while keeping track of
+        selected files or directories
+        """
         if self.file_walker.chdir_into(self.file_walker.join_to_cur(key.get_label())):
             selectable_list_box  = self.frame.body.base_widget[0]
             selectable_list_box.body.clear()
@@ -276,15 +305,23 @@ class ViewBuilder(object):
                 selectable_list_box.body.extend(tracked_item)
 
     def selectable_mode(self,dir_contents=[]):
+        """
+        Return a Specialized list for use in the Listbox
+        """
         traverse_buttons = [urwid.Button('..',on_press=self.select_signal_handler)]
         traverse_buttons.extend([urwid.CheckBox(file_or_dir,on_state_change=self.change_attr) for file_or_dir in dir_contents ])
         return urwid.MonitoredFocusList(traverse_buttons)
 
     def msg_to_footer(self,msg):
+        """
+        Alters contents of the footer with a Text message
+        """
         self.frame.footer=urwid.AttrMap(urwid.Text(str(msg)),'footer')
 
     def change_attr(self,key,data):
         """
+        Allows for highlighting selected items in the current directory while in select mode
+        however it is temporary 
         key  : The widget in focus 
         data : The current value for the widget
         """
@@ -297,6 +334,13 @@ class ViewBuilder(object):
             key = urwid.AttrMap(key,'body')
             self.swap_widget_at_focus(key)
 
+    def get_footer(self):
+        """
+        Creates a footer with information of current disk usage
+        """
+        du = self.file_walker.get_disk_usage()
+        return urwid.AttrMap(urwid.Text(du['used'] + '/' + du['total'],align='right'),'footer')
+
     def swap_widget_at_focus(self,key):
         pos = self.frame.body.base_widget[0].focus_position
         self.frame.body.base_widget[0].body[pos] = key
@@ -307,7 +351,7 @@ class ViewBuilder(object):
 class PopupItemInstance(urwid.WidgetWrap):
     signals = ['close']
     """
-    Show Some stat information
+    Show Some stat information about file under cursor
     TODO: Make this have more functionality with either Show stat info or Some other plugin 
     e.g JSON export, XML export etc
     """
@@ -340,17 +384,25 @@ class PopupItemInstance(urwid.WidgetWrap):
         super(PopupItemInstance,self).__init__(urwid.AttrWrap(filler,'popupbg'))
 
 class ListPopUpLauncher(urwid.PopUpLauncher):
-
+    """
+    Allows the Listbox to show Popups
+    """
     def __init__(self,handler_func,*args,**kwargs):
         super(ListPopUpLauncher,self).__init__(CustomListBox(*args,**kwargs).create_pop_up_bridge(self))
         urwid.connect_signal(self.base_widget,'toggle-select',handler_func)
 
     def create_pop_up(self):
+        """
+        Override method to create a popup
+        """
         pp = FileOperationsDialog(".",self)
         urwid.connect_signal(pp,'exit',self.close_pop_up())
         return pp
 
     def get_pop_up_parameters(self):
+        """
+        Override method to return layout parameters
+        """
         return {'left':4,'top':3  , 'overlay_width':36,'overlay_height':7 } 
 
 
@@ -414,6 +466,8 @@ class PopupableListItemButton(urwid.PopUpLauncher):
         return popup
 
     def open_pop_up(self,stat_file_or_dir,keypress):
+        """
+        """
         self.cur_key = keypress
         self.item_label = stat_file_or_dir
         super(PopupableListItemButton,self).open_pop_up()
@@ -427,7 +481,7 @@ class PopupableListItemButton(urwid.PopUpLauncher):
 
 class ListItemButton(urwid.Button):
 
-    """Customized Button for the Listwidget able to respond to various input"""
+    """Customized Button for the Listwidget able to respond to various input, and make popups"""
 
     def create_pop_up_bridge(self,bridge):
         self.pop_up_bridge = bridge
@@ -485,7 +539,7 @@ if __name__ == "__main__":
         ('header','black','white','bold'),
         ('body','white','dark blue','bold'),
         ('reversed','standout',''),
-        ('footer','black','dark red','underline'),
+        ('footer','black','white','underline'),
         ('popupbg','white','dark red',''),
         ('bold','black','white',''),
         ('green','black','dark green',('bold','standout')),
