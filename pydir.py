@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+#######################################################################
+#                               Pydir!                                #
+#######################################################################
+#########################################
+#  Minimalist python directory browser  #
+#########################################
+
+#######################################################################
+#            Author: Harry Kituyi <kituyiharry@gmail.com>             #
+#######################################################################
+
 
 """
 Simple File Directory Browser that i wrote as a Weekend project 
@@ -137,6 +148,7 @@ class CustomListBox(urwid.ListBox):
 
     def create_pop_up_bridge(self,bridge):
         """
+        bbox
         Used to backreference this widget so that popups inflated can have a Close button that closes them
         ,Probably not a good callback pattern but meh!!
         """
